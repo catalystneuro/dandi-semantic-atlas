@@ -11,15 +11,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+import numpy as np
 from sklearn.cluster import KMeans
-from sklearn.decomposition import TruncatedSVD
-from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
+from sklearn.decomposition import PCA, TruncatedSVD
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.manifold import TSNE
-from sklearn.preprocessing import Normalizer
 
 API = "https://api.dandiarchive.org/api"
 COLORS = ["#2c7a66", "#e07a4e", "#6b66a9", "#d6a73c", "#4386a6", "#a75873", "#76a657", "#8b6b4e", "#41a0a0", "#bc5960", "#74808e", "#8c65a4", "#3f8fbd", "#d47f9a", "#7995bd", "#b78642", "#5f9b8f", "#9a7268"]
-STOP = {"data", "dataset", "dandiset", "using", "based", "recording", "recordings", "study", "approach", "technique", "series", "neural", "brain", "mouse", "mice", "et", "al", "figure", "paper", "results", "used", "use", "contains", "include", "including", "nwb"}
+STOP = {"data", "dataset", "dandiset", "using", "based", "recording", "recordings", "study", "approach", "technique", "series", "neural", "brain", "mouse", "mice", "et", "al", "figure", "paper", "results", "used", "use", "contains", "include", "including", "nwb", "https", "http", "com", "org", "test", "testing", "house", "mus", "musculus"}
 
 
 def get_json(url: str) -> dict:
@@ -88,20 +88,37 @@ def main() -> None:
     records = [record for record in records if record["files"] > 0]
     records.sort(key=lambda item: item["id"])
     documents = [item.pop("document") for item in records]
-    vectorizer = TfidfVectorizer(stop_words=list(ENGLISH_STOP_WORDS | STOP), ngram_range=(1, 2), min_df=2 if len(records) > 50 else 1, max_df=.88, max_features=12000, sublinear_tf=True)
+    vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), min_df=2 if len(records) > 50 else 1, max_df=.94, max_features=7000, sublinear_tf=True)
     matrix = vectorizer.fit_transform(documents)
-    dimensions = min(100, matrix.shape[0] - 1, matrix.shape[1] - 1)
+    dimensions = min(80, matrix.shape[0] - 1, matrix.shape[1] - 1)
     dense = TruncatedSVD(n_components=max(2, dimensions), random_state=42).fit_transform(matrix)
-    dense = Normalizer(copy=False).fit_transform(dense)
-    perplexity = max(5, min(42, (len(records) - 1) // 3))
-    points = TSNE(n_components=3, perplexity=perplexity, init="pca", learning_rate="auto", max_iter=1600, random_state=42).fit_transform(dense)
+    perplexity = max(5, min(35, (len(records) - 1) // 3))
+    points = TSNE(n_components=3, perplexity=perplexity, init="pca", learning_rate="auto", max_iter=1400, random_state=42).fit_transform(dense)
     points = scale(points)
-    cluster_count = max(6, min(18, round(math.sqrt(len(records) / 1.7))))
-    model = KMeans(n_clusters=cluster_count, random_state=42, n_init=30).fit(dense)
+    base_cluster_count = max(4, min(12, round(math.sqrt(len(records) / 2))))
+    labels = KMeans(n_clusters=base_cluster_count, random_state=42, n_init=20).fit_predict(dense)
+    # Preserve the original broad topic solution and refine only oversized groups.
+    # This avoids forcing every coherent topic into many smaller, less meaningful bins.
+    next_cluster = base_cluster_count
+    max_cluster_size = max(80, round(len(records) * .15))
+    while next_cluster < len(COLORS):
+        sizes = np.bincount(labels)
+        largest = int(sizes.argmax())
+        if sizes[largest] <= max_cluster_size:
+            break
+        member_indices = np.flatnonzero(labels == largest)
+        split = KMeans(n_clusters=2, random_state=42 + next_cluster, n_init=20).fit_predict(dense[member_indices])
+        split_sizes = np.bincount(split, minlength=2)
+        if split_sizes.min() < len(member_indices) * .3:
+            projection = PCA(n_components=1, random_state=42).fit_transform(dense[member_indices]).ravel()
+            split = (projection >= np.median(projection)).astype(int)
+        labels[member_indices[split == 1]] = next_cluster
+        next_cluster += 1
+    cluster_count = next_cluster
     feature_names = vectorizer.get_feature_names_out()
     cluster_rows = []
     for cluster_id in range(cluster_count):
-        members = model.labels_ == cluster_id
+        members = labels == cluster_id
         scores = matrix[members].mean(axis=0).A1
         ordered = scores.argsort()[::-1]
         terms = []
@@ -113,9 +130,9 @@ def main() -> None:
                 break
         label = " · ".join(word.title() for word in terms[:2]) or f"Topic {cluster_id + 1}"
         cluster_rows.append({"id": cluster_id, "label": label, "count": int(members.sum()), "color": COLORS[cluster_id], "terms": terms})
-    for item, point, cluster_id in zip(records, points, model.labels_):
+    for item, point, cluster_id in zip(records, points, labels):
         item.update({"x": round(float(point[0]), 5), "y": round(float(point[1]), 5), "z": round(float(point[2]), 5), "cluster": int(cluster_id)})
-    payload = {"generatedAt": datetime.now(timezone.utc).isoformat(), "total": len(records), "method": "normalized TF–IDF · SVD · 3D t-SNE · k-means", "clusters": cluster_rows, "dandisets": records}
+    payload = {"generatedAt": datetime.now(timezone.utc).isoformat(), "total": len(records), "method": "TF–IDF · SVD · 3D t-SNE · adaptive k-means", "clusters": cluster_rows, "dandisets": records}
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")

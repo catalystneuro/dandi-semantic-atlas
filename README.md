@@ -1,6 +1,6 @@
 # DANDI Atlas
 
-An interactive, rotatable 3D semantic map for discovering datasets in the [DANDI Archive](https://dandiarchive.org). Titles, descriptions, keywords, anatomy, species, approaches, techniques, and measured variables are vectorized with normalized TF–IDF, reduced with SVD and 3D t-SNE, and grouped with k-means.
+An interactive, rotatable 3D semantic map for discovering datasets in the [DANDI Archive](https://dandiarchive.org). Titles, descriptions, keywords, anatomy, species, approaches, techniques, and measured variables are vectorized with TF–IDF, reduced with SVD and 3D t-SNE, and grouped with adaptive k-means that subdivides only oversized topic regions.
 
 **Live site:** [catalystneuro.github.io/dandi-tsne](https://catalystneuro.github.io/dandi-tsne/)
 
