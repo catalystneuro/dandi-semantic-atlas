@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch DANDI metadata, reduce it to two dimensions, and write the web artifact."""
+"""Fetch DANDI metadata, reduce it to three dimensions, and write the web artifact."""
 
 from __future__ import annotations
 
@@ -13,12 +13,13 @@ from pathlib import Path
 import requests
 from sklearn.cluster import KMeans
 from sklearn.decomposition import TruncatedSVD
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 from sklearn.manifold import TSNE
+from sklearn.preprocessing import Normalizer
 
 API = "https://api.dandiarchive.org/api"
-COLORS = ["#2c7a66", "#e07a4e", "#6b66a9", "#d6a73c", "#4386a6", "#a75873", "#76a657", "#8b6b4e", "#41a0a0", "#bc5960", "#74808e", "#8c65a4"]
-STOP = {"data", "dataset", "dandiset", "using", "based", "recording", "recordings", "study", "approach", "technique", "series", "neural", "brain", "mouse", "mice"}
+COLORS = ["#2c7a66", "#e07a4e", "#6b66a9", "#d6a73c", "#4386a6", "#a75873", "#76a657", "#8b6b4e", "#41a0a0", "#bc5960", "#74808e", "#8c65a4", "#3f8fbd", "#d47f9a", "#7995bd", "#b78642", "#5f9b8f", "#9a7268"]
+STOP = {"data", "dataset", "dandiset", "using", "based", "recording", "recordings", "study", "approach", "technique", "series", "neural", "brain", "mouse", "mice", "et", "al", "figure", "paper", "results", "used", "use", "contains", "include", "including", "nwb"}
 
 
 def get_json(url: str) -> dict:
@@ -87,15 +88,16 @@ def main() -> None:
     records = [record for record in records if record["files"] > 0]
     records.sort(key=lambda item: item["id"])
     documents = [item.pop("document") for item in records]
-    vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), min_df=2 if len(records) > 50 else 1, max_df=.94, max_features=7000, sublinear_tf=True)
+    vectorizer = TfidfVectorizer(stop_words=list(ENGLISH_STOP_WORDS | STOP), ngram_range=(1, 2), min_df=2 if len(records) > 50 else 1, max_df=.88, max_features=12000, sublinear_tf=True)
     matrix = vectorizer.fit_transform(documents)
-    dimensions = min(80, matrix.shape[0] - 1, matrix.shape[1] - 1)
+    dimensions = min(100, matrix.shape[0] - 1, matrix.shape[1] - 1)
     dense = TruncatedSVD(n_components=max(2, dimensions), random_state=42).fit_transform(matrix)
-    perplexity = max(5, min(35, (len(records) - 1) // 3))
-    points = TSNE(n_components=2, perplexity=perplexity, init="pca", learning_rate="auto", max_iter=1200, random_state=42).fit_transform(dense)
+    dense = Normalizer(copy=False).fit_transform(dense)
+    perplexity = max(5, min(42, (len(records) - 1) // 3))
+    points = TSNE(n_components=3, perplexity=perplexity, init="pca", learning_rate="auto", max_iter=1600, random_state=42).fit_transform(dense)
     points = scale(points)
-    cluster_count = max(4, min(12, round(math.sqrt(len(records) / 2))))
-    model = KMeans(n_clusters=cluster_count, random_state=42, n_init=20).fit(dense)
+    cluster_count = max(6, min(18, round(math.sqrt(len(records) / 1.7))))
+    model = KMeans(n_clusters=cluster_count, random_state=42, n_init=30).fit(dense)
     feature_names = vectorizer.get_feature_names_out()
     cluster_rows = []
     for cluster_id in range(cluster_count):
@@ -112,8 +114,8 @@ def main() -> None:
         label = " · ".join(word.title() for word in terms[:2]) or f"Topic {cluster_id + 1}"
         cluster_rows.append({"id": cluster_id, "label": label, "count": int(members.sum()), "color": COLORS[cluster_id], "terms": terms})
     for item, point, cluster_id in zip(records, points, model.labels_):
-        item.update({"x": round(float(point[0]), 5), "y": round(float(point[1]), 5), "cluster": int(cluster_id)})
-    payload = {"generatedAt": datetime.now(timezone.utc).isoformat(), "total": len(records), "method": "TF–IDF · SVD · t-SNE · k-means", "clusters": cluster_rows, "dandisets": records}
+        item.update({"x": round(float(point[0]), 5), "y": round(float(point[1]), 5), "z": round(float(point[2]), 5), "cluster": int(cluster_id)})
+    payload = {"generatedAt": datetime.now(timezone.utc).isoformat(), "total": len(records), "method": "normalized TF–IDF · SVD · 3D t-SNE · k-means", "clusters": cluster_rows, "dandisets": records}
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
