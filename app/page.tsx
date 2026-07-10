@@ -106,7 +106,10 @@ export default function Home() {
   const [activeClusters, setActiveClusters] = useState<Set<number>>(new Set());
   const [showAbout, setShowAbout] = useState(false);
 
-  useEffect(() => { fetch("/data/dandisets.json").then((r) => r.json()).then((d: ArchiveData) => { setData(d); setActiveClusters(new Set(d.clusters.map((c) => c.id))); }); }, []);
+  useEffect(() => {
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+    fetch(`${basePath}/data/dandisets.json`).then((r) => r.json()).then((d: ArchiveData) => { setData(d); setActiveClusters(new Set(d.clusters.map((c) => c.id))); });
+  }, []);
   const suggestions = useMemo(() => !data || query.trim().length < 2 ? [] : data.dandisets.filter((d) => `${d.title} ${d.description} ${d.keywords.join(" ")}`.toLowerCase().includes(query.toLowerCase())).slice(0, 5), [data, query]);
 
   if (!data) return <main className="loading"><span className="mark">d</span><p>Charting the archive…</p></main>;

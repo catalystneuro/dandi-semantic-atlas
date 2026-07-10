@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: update-dandi-atlas
@@ -36,3 +37,7 @@ jobs:
           git add public/data/dandisets.json
           git commit -m "data: refresh DANDI atlas"
           git push
+      - name: Publish refreshed map
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-pages.yml --repo "$GITHUB_REPOSITORY"

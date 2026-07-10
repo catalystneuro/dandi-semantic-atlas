@@ -2,6 +2,8 @@
 
 An interactive semantic map for discovering datasets in the [DANDI Archive](https://dandiarchive.org). Titles, descriptions, keywords, anatomy, species, approaches, techniques, and measured variables are vectorized with TF–IDF, reduced with SVD and t-SNE, and grouped with k-means.
 
+**Live site:** [catalystneuro.github.io/dandi-tsne](https://catalystneuro.github.io/dandi-tsne/)
+
 Only Dandisets containing at least one file are included in the map.
 
 ## Local development
