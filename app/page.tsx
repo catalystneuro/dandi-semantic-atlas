@@ -181,7 +181,7 @@ export default function Home() {
         </div>
         <div className="aside-title"><span>{colorMode === "species" ? "Species" : "Topic regions"}</span><button onClick={() => setActiveKeys(activeKeys.size === groups.length ? new Set() : new Set(groups.map((g) => g.key)))}>{activeKeys.size === groups.length ? "Clear" : "All"}</button></div>
         <div className="cluster-list">{groups.map((g) => <button key={g.key} className={activeKeys.has(g.key) ? "cluster active" : "cluster"} onClick={() => toggleGroup(g.key)}><span className="dot" style={{ background: g.color }} /><span><b>{g.label}</b><small>{g.count} datasets{g.terms.length ? ` · ${g.terms.slice(0, 3).join(", ")}` : ""}</small></span></button>)}</div>
-        <div className="method-note"><b>How to read it</b><p>Distance suggests semantic similarity—not scientific quality. Colors show {colorMode === "species" ? "the primary species of each dataset" : "machine-found topic regions"}.</p></div>
+        <div className="method-note"><b>How to read it</b><p>Distance suggests semantic similarity. Colors show {colorMode === "species" ? "the primary species of each dataset" : "machine-found topic regions"}.</p></div>
       </aside>
       <MapCanvas data={data} groups={groups} keyOf={keyOf} activeKeys={activeKeys} query={query} selected={selected} onSelect={setSelected} />
       <aside className={selected ? "details open" : "details"}>
@@ -200,7 +200,7 @@ export default function Home() {
         </> : <div className="empty-detail"><span>◎</span><b>Select a point</b><p>Click any dataset on the map to read its abstract and metadata.</p></div>}
       </aside>
     </section>
-    <footer><span>{data.total.toLocaleString()} Dandisets mapped</span><span>{data.method}</span><a href="https://github.com/dandi/dandi-archive" target="_blank" rel="noreferrer">About DANDI ↗</a></footer>
+    <footer><span>{data.method}</span><a href="https://github.com/catalystneuro/dandi-tsne" target="_blank" rel="noreferrer">Source on GitHub ↗</a><a href="https://github.com/dandi/dandi-archive" target="_blank" rel="noreferrer">About DANDI ↗</a></footer>
     {showAbout && <div className="modal-backdrop" onMouseDown={() => setShowAbout(false)}><section className="modal" onMouseDown={(e) => e.stopPropagation()}><button className="close" onClick={() => setShowAbout(false)}>×</button><p className="eyebrow">About the atlas</p><h2>A map made from meaning</h2><p>DANDI Atlas turns titles, descriptions, keywords, anatomy, species, and experimental methods into a numerical representation. Dimensionality reduction places similar records near one another; clustering identifies broad topic regions.</p><p>The source metadata comes directly from the DANDI Archive and is rebuilt nightly. This is an exploratory aid, not a taxonomy or ranking.</p><button className="modal-done" onClick={() => setShowAbout(false)}>Start exploring</button></section></div>}
   </main>;
 }
