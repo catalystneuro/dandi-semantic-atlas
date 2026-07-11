@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""Fetch DANDI metadata, reduce it to three dimensions, and write the web artifact."""
+"""Fetch DANDI metadata, embed it, and write the web artifact.
+
+Modeling pipeline (BERTopic-style):
+    sentence embeddings -> UMAP (2D) -> HDBSCAN -> c-TF-IDF labels
+
+Clustering and the map layout are derived from the *same* 2D UMAP embedding, so
+a dataset's color always matches its position on the map.
+"""
 
 from __future__ import annotations
 
 import argparse
+import colorsys
 import json
-import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
 import numpy as np
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA, TruncatedSVD
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.manifold import TSNE
+import requests
 
 API = "https://api.dandiarchive.org/api"
-COLORS = ["#2c7a66", "#e07a4e", "#6b66a9", "#d6a73c", "#4386a6", "#a75873", "#76a657", "#8b6b4e", "#41a0a0", "#bc5960", "#74808e", "#8c65a4", "#3f8fbd", "#d47f9a", "#7995bd", "#b78642", "#5f9b8f", "#9a7268"]
-STOP = {"data", "dataset", "dandiset", "using", "based", "recording", "recordings", "study", "approach", "technique", "series", "neural", "brain", "mouse", "mice", "et", "al", "figure", "paper", "results", "used", "use", "contains", "include", "including", "nwb", "https", "http", "com", "org", "test", "testing", "house", "mus", "musculus"}
+EMBED_MODEL = "all-MiniLM-L6-v2"
+# Curated, colorblind-friendlier base palette; extended procedurally if more topics appear.
+BASE_COLORS = ["#2c7a66", "#e07a4e", "#6b66a9", "#d6a73c", "#4386a6", "#a75873", "#76a657", "#8b6b4e", "#41a0a0", "#bc5960", "#8c65a4", "#c07a2c"]
+OUTLIER_COLOR = "#9aa4ae"
+STOP = {"data", "dataset", "dandiset", "using", "based", "recording", "recordings", "study", "approach", "technique", "series", "neural", "brain", "mouse", "mice"}
 
 
 def get_json(url: str) -> dict:
@@ -50,6 +56,7 @@ def fetch_metadata(record: dict) -> dict:
         print(f"warning: DANDI:{identifier}: {exc}")
         meta = {}
     summary = meta.get("assetsSummary") or {}
+    authors = [str(c.get("name", "")).strip() for c in (meta.get("contributor") or []) if isinstance(c, dict) and c.get("name") and "dcite:Author" in (c.get("roleName") or [])]
     keywords = [str(x).strip() for x in (meta.get("keywords") or []) if x]
     about = names(meta.get("about"))
     species = names(summary.get("species"))
@@ -58,10 +65,16 @@ def fetch_metadata(record: dict) -> dict:
     variables = [str(x) for x in (summary.get("variableMeasured") or [])]
     title = meta.get("name") or (record.get("draft_version") or {}).get("name") or f"Dandiset {identifier}"
     description = meta.get("description") or ""
-    document = " ".join([title, description, " ".join(keywords * 2), " ".join(about * 2), " ".join(species), " ".join(approaches * 2), " ".join(techniques), " ".join(variables)])
+    # Natural-language document: title + abstract carry the embedding signal (encoder
+    # truncates ~256 tokens); trailing metadata sharpens the c-TF-IDF topic labels.
+    parts = [title.strip(), description.strip()]
+    for prefix, values in (("Anatomy", about), ("Species", species), ("Approaches", approaches), ("Techniques", techniques), ("Keywords", keywords), ("Variables", variables)):
+        if values:
+            parts.append(f"{prefix}: {', '.join(dict.fromkeys(v for v in values if v))}.")
+    document = "\n".join(part for part in parts if part)
     return {
         "id": identifier, "title": title, "description": description, "document": document,
-        "keywords": keywords, "species": species, "approaches": approaches, "techniques": techniques,
+        "authors": authors, "keywords": keywords, "species": species, "approaches": approaches, "techniques": techniques,
         "bytes": summary.get("numberOfBytes") or 0,
         "files": summary.get("numberOfFiles") or (record.get("draft_version") or record.get("most_recent_published_version") or {}).get("asset_count") or 0,
         "subjects": summary.get("numberOfSubjects") or 0, "modified": record.get("modified", ""),
@@ -70,10 +83,37 @@ def fetch_metadata(record: dict) -> dict:
 
 
 def scale(values):
+    """Normalize an (n, 2) array into the unit square for the web layout."""
     low, high = values.min(axis=0), values.max(axis=0)
     span = high - low
     span[span == 0] = 1
     return (values - low) / span
+
+
+def palette(count: int) -> list[str]:
+    """Return `count` distinct hex colors, extending the curated base procedurally."""
+    colors = list(BASE_COLORS[:count])
+    while len(colors) < count:
+        hue = (len(colors) * 0.61803398875) % 1.0
+        r, g, b = colorsys.hsv_to_rgb(hue, 0.52, 0.72)
+        colors.append(f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}")
+    return colors
+
+
+def clean_terms(raw_terms: list[str], limit: int = 5) -> list[str]:
+    """Drop stopwords and near-duplicate stems from a cluster's c-TF-IDF terms."""
+    terms: list[str] = []
+    for term in raw_terms:
+        term = term.strip().lower()
+        if not term or term in STOP or any(word in STOP for word in term.split()):
+            continue
+        stem = term[:5]
+        if any(stem == picked[:5] or term in picked or picked in term for picked in terms):
+            continue
+        terms.append(term)
+        if len(terms) == limit:
+            break
+    return terms
 
 
 def main() -> None:
@@ -81,6 +121,16 @@ def main() -> None:
     parser.add_argument("--limit", type=int, help="Fetch only this many records (useful for previews)")
     parser.add_argument("--output", default="public/data/dandisets.json")
     args = parser.parse_args()
+
+    # Heavy ML imports are local so `--help` and the fetch stay fast to load.
+    from bertopic import BERTopic
+    from bertopic.vectorizers import ClassTfidfTransformer
+    from hdbscan import HDBSCAN
+    from sentence_transformers import SentenceTransformer
+    from sklearn.feature_extraction.text import CountVectorizer
+    from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+    from umap import UMAP
+
     catalog = get_catalog(args.limit)
     with ThreadPoolExecutor(max_workers=12) as pool:
         futures = [pool.submit(fetch_metadata, record) for record in catalog]
@@ -88,55 +138,61 @@ def main() -> None:
     records = [record for record in records if record["files"] > 0]
     records.sort(key=lambda item: item["id"])
     documents = [item.pop("document") for item in records]
-    vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), min_df=2 if len(records) > 50 else 1, max_df=.94, max_features=7000, sublinear_tf=True)
-    matrix = vectorizer.fit_transform(documents)
-    dimensions = min(80, matrix.shape[0] - 1, matrix.shape[1] - 1)
-    dense = TruncatedSVD(n_components=max(2, dimensions), random_state=42).fit_transform(matrix)
-    perplexity = max(5, min(35, (len(records) - 1) // 3))
-    points = TSNE(n_components=3, perplexity=perplexity, init="pca", learning_rate="auto", max_iter=1400, random_state=42).fit_transform(dense)
-    points = scale(points)
-    base_cluster_count = max(4, min(12, round(math.sqrt(len(records) / 2))))
-    labels = KMeans(n_clusters=base_cluster_count, random_state=42, n_init=20).fit_predict(dense)
-    # Preserve the original broad topic solution and refine only oversized groups.
-    # This avoids forcing every coherent topic into many smaller, less meaningful bins.
-    next_cluster = base_cluster_count
-    max_cluster_size = max(80, round(len(records) * .15))
-    while next_cluster < len(COLORS):
-        sizes = np.bincount(labels)
-        largest = int(sizes.argmax())
-        if sizes[largest] <= max_cluster_size:
-            break
-        member_indices = np.flatnonzero(labels == largest)
-        split = KMeans(n_clusters=2, random_state=42 + next_cluster, n_init=20).fit_predict(dense[member_indices])
-        split_sizes = np.bincount(split, minlength=2)
-        if split_sizes.min() < len(member_indices) * .3:
-            projection = PCA(n_components=1, random_state=42).fit_transform(dense[member_indices]).ravel()
-            split = (projection >= np.median(projection)).astype(int)
-        labels[member_indices[split == 1]] = next_cluster
-        next_cluster += 1
-    cluster_count = next_cluster
-    feature_names = vectorizer.get_feature_names_out()
+
+    print(f"embedding {len(documents)} documents with {EMBED_MODEL}…")
+    encoder = SentenceTransformer(EMBED_MODEL)
+    embeddings = encoder.encode(documents, normalize_embeddings=True, show_progress_bar=True)
+
+    # A single 2D UMAP drives BOTH the map layout and the clustering, so colors and
+    # positions can never disagree. HDBSCAN then finds natural, uneven topic regions
+    # and flags genuine outliers (label -1) instead of forcing a mega-cluster.
+    n = len(records)
+    umap_model = UMAP(n_components=2, n_neighbors=min(15, max(2, n - 1)), min_dist=0.0, metric="cosine", random_state=42)
+    # Keep this small so tight, genuinely distinct groups (e.g. C. elegans) survive as their
+    # own topics instead of being swept into the outlier pile. EOM selection then keeps the
+    # regions stable without fragmenting into dozens of near-duplicate specks.
+    min_cluster_size = max(6, n // 85)
+    hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=1, metric="euclidean", cluster_selection_method="eom", prediction_data=True)
+    vectorizer_model = CountVectorizer(stop_words=list(ENGLISH_STOP_WORDS | STOP), ngram_range=(1, 2), min_df=2 if n > 50 else 1)
+    topic_model = BERTopic(
+        embedding_model=encoder,
+        umap_model=umap_model,
+        hdbscan_model=hdbscan_model,
+        vectorizer_model=vectorizer_model,
+        ctfidf_model=ClassTfidfTransformer(reduce_frequent_words=True),
+        top_n_words=10,
+        calculate_probabilities=False,
+        verbose=True,
+    )
+    labels, _ = topic_model.fit_transform(documents, embeddings)
+    labels = np.asarray(labels)
+
+    points = scale(np.asarray(umap_model.embedding_, dtype=float))
+
+    topic_ids = sorted(tid for tid in set(labels.tolist()) if tid != -1)
+    colors = palette(len(topic_ids))
+    color_of = {tid: colors[i] for i, tid in enumerate(topic_ids)}
+    color_of[-1] = OUTLIER_COLOR
+
     cluster_rows = []
-    for cluster_id in range(cluster_count):
-        members = labels == cluster_id
-        scores = matrix[members].mean(axis=0).A1
-        ordered = scores.argsort()[::-1]
-        terms = []
-        for index in ordered:
-            term = feature_names[index]
-            if term not in STOP and not any(word in STOP for word in term.split()) and term not in terms:
-                terms.append(term)
-            if len(terms) == 5:
-                break
-        label = " · ".join(word.title() for word in terms[:2]) or f"Topic {cluster_id + 1}"
-        cluster_rows.append({"id": cluster_id, "label": label, "count": int(members.sum()), "color": COLORS[cluster_id], "terms": terms})
-    for item, point, cluster_id in zip(records, points, labels):
-        item.update({"x": round(float(point[0]), 5), "y": round(float(point[1]), 5), "z": round(float(point[2]), 5), "cluster": int(cluster_id)})
-    payload = {"generatedAt": datetime.now(timezone.utc).isoformat(), "total": len(records), "method": "TF–IDF · SVD · 3D t-SNE · adaptive k-means", "clusters": cluster_rows, "dandisets": records}
+    for tid in topic_ids:
+        raw = [term for term, _ in (topic_model.get_topic(tid) or [])]
+        terms = clean_terms(raw)
+        label = " · ".join(word.title() for word in terms[:2]) or f"Topic {tid + 1}"
+        cluster_rows.append({"id": int(tid), "label": label, "count": int((labels == tid).sum()), "color": color_of[tid], "terms": terms})
+    cluster_rows.sort(key=lambda row: row["count"], reverse=True)
+    outliers = int((labels == -1).sum())
+    if outliers:
+        cluster_rows.append({"id": -1, "label": "Unclustered", "count": outliers, "color": OUTLIER_COLOR, "terms": []})
+
+    for item, point, tid in zip(records, points, labels):
+        item.update({"x": round(float(point[0]), 5), "y": round(float(point[1]), 5), "cluster": int(tid)})
+
+    payload = {"generatedAt": datetime.now(timezone.utc).isoformat(), "total": len(records), "method": "MiniLM embeddings · UMAP · HDBSCAN · c-TF-IDF", "clusters": cluster_rows, "dandisets": records}
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
-    print(f"wrote {len(records)} records across {cluster_count} clusters to {output}")
+    print(f"wrote {len(records)} records across {len(topic_ids)} topics ({outliers} unclustered) to {output}")
 
 
 if __name__ == "__main__":

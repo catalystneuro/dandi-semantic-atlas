@@ -40,3 +40,10 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# Python
+__pycache__/
+*.pyc
+
+# TypeScript build cache
+tsconfig.tsbuildinfo
