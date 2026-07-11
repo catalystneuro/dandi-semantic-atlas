@@ -56,7 +56,11 @@ def fetch_metadata(record: dict) -> dict:
         print(f"warning: DANDI:{identifier}: {exc}")
         meta = {}
     summary = meta.get("assetsSummary") or {}
-    authors = [str(c.get("name", "")).strip() for c in (meta.get("contributor") or []) if isinstance(c, dict) and c.get("name") and "dcite:Author" in (c.get("roleName") or [])]
+    contributors = [c for c in (meta.get("contributor") or []) if isinstance(c, dict) and str(c.get("name", "")).strip()]
+    authors = [str(c["name"]).strip() for c in contributors if "dcite:Author" in (c.get("roleName") or [])]
+    if not authors:
+        # Many Dandisets never tag an explicit Author; fall back to the named people.
+        authors = [str(c["name"]).strip() for c in contributors if c.get("schemaKey") != "Organization"]
     keywords = [str(x).strip() for x in (meta.get("keywords") or []) if x]
     about = names(meta.get("about"))
     species = names(summary.get("species"))
