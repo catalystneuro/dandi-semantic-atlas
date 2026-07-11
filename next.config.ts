@@ -6,8 +6,8 @@ const nextConfig: NextConfig = {
   ...(isGitHubPages
     ? {
         output: "export" as const,
-        basePath: "/dandi-tsne",
-        assetPrefix: "/dandi-tsne",
+        basePath: "/dandi-semantic-atlas",
+        assetPrefix: "/dandi-semantic-atlas",
         trailingSlash: true,
         images: { unoptimized: true },
       }

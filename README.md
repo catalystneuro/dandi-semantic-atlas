@@ -2,7 +2,7 @@
 
 An interactive semantic map for discovering datasets in the [DANDI Archive](https://dandiarchive.org). Titles, descriptions, keywords, anatomy, species, approaches, techniques, and measured variables are embedded with a sentence-transformer (MiniLM), projected to 2D with UMAP, and grouped into topic regions with HDBSCAN. Cluster labels come from c-TF-IDF over each region's documents.
 
-**Live site:** [catalystneuro.github.io/dandi-tsne](https://catalystneuro.github.io/dandi-tsne/)
+**Live site:** [catalystneuro.github.io/dandi-semantic-atlas](https://catalystneuro.github.io/dandi-semantic-atlas/)
 
 Only Dandisets containing at least one file are included in the map.
 

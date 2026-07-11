@@ -207,7 +207,7 @@ export default function Home() {
         </> : <div className="empty-detail"><span>◎</span><b>Select a point</b><p>Click any dataset on the map to read its abstract and metadata.</p></div>}
       </aside>
     </section>
-    <footer><span>{data.method}</span><a href="https://github.com/catalystneuro/dandi-tsne" target="_blank" rel="noreferrer">Source on GitHub ↗</a><a href="https://github.com/dandi/dandi-archive" target="_blank" rel="noreferrer">About DANDI ↗</a></footer>
+    <footer><span>{data.method}</span><a href="https://github.com/catalystneuro/dandi-semantic-atlas" target="_blank" rel="noreferrer">Source on GitHub ↗</a><a href="https://github.com/dandi/dandi-archive" target="_blank" rel="noreferrer">About DANDI ↗</a></footer>
     {showAbout && <div className="modal-backdrop" onMouseDown={() => setShowAbout(false)}><section className="modal" onMouseDown={(e) => e.stopPropagation()}><button className="close" onClick={() => setShowAbout(false)}>×</button><p className="eyebrow">About the atlas</p><h2>A map made from meaning</h2><p>DANDI Atlas turns titles, descriptions, keywords, anatomy, species, and experimental methods into a numerical representation. Dimensionality reduction places similar records near one another; clustering identifies broad topic regions.</p><p>The source metadata comes directly from the DANDI Archive and is rebuilt nightly. This is an exploratory aid, not a taxonomy or ranking.</p><button className="modal-done" onClick={() => setShowAbout(false)}>Start exploring</button></section></div>}
   </main>;
 }
