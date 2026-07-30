@@ -21,7 +21,10 @@ import numpy as np
 import requests
 
 API = "https://api.dandiarchive.org/api"
-EMBED_MODEL = "all-MiniLM-L6-v2"
+EMBED_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+# Documents are title + abstract + metadata, almost always well under this; the cap
+# just bounds encode cost on the few very long descriptions.
+EMBED_MAX_TOKENS = 2048
 # Curated, colorblind-friendlier base palette; extended procedurally if more topics appear.
 BASE_COLORS = ["#2c7a66", "#e07a4e", "#6b66a9", "#d6a73c", "#4386a6", "#a75873", "#76a657", "#8b6b4e", "#41a0a0", "#bc5960", "#8c65a4", "#c07a2c"]
 OUTLIER_COLOR = "#9aa4ae"
@@ -69,8 +72,8 @@ def fetch_metadata(record: dict) -> dict:
     variables = [str(x) for x in (summary.get("variableMeasured") or [])]
     title = meta.get("name") or (record.get("draft_version") or {}).get("name") or f"Dandiset {identifier}"
     description = meta.get("description") or ""
-    # Natural-language document: title + abstract carry the embedding signal (encoder
-    # truncates ~256 tokens); trailing metadata sharpens the c-TF-IDF topic labels.
+    # Natural-language document: title + abstract carry the embedding signal;
+    # trailing metadata sharpens the c-TF-IDF topic labels.
     parts = [title.strip(), description.strip()]
     for prefix, values in (("Anatomy", about), ("Species", species), ("Approaches", approaches), ("Techniques", techniques), ("Keywords", keywords), ("Variables", variables)):
         if values:
@@ -145,6 +148,7 @@ def main() -> None:
 
     print(f"embedding {len(documents)} documents with {EMBED_MODEL}…")
     encoder = SentenceTransformer(EMBED_MODEL)
+    encoder.max_seq_length = EMBED_MAX_TOKENS
     embeddings = encoder.encode(documents, normalize_embeddings=True, show_progress_bar=True)
 
     # A single 2D UMAP drives BOTH the map layout and the clustering, so colors and
@@ -192,7 +196,7 @@ def main() -> None:
     for item, point, tid in zip(records, points, labels):
         item.update({"x": round(float(point[0]), 5), "y": round(float(point[1]), 5), "z": round(float(point[2]), 5), "cluster": int(tid)})
 
-    payload = {"generatedAt": datetime.now(timezone.utc).isoformat(), "total": len(records), "method": "MiniLM embeddings · UMAP (3D) · HDBSCAN · c-TF-IDF", "clusters": cluster_rows, "dandisets": records}
+    payload = {"generatedAt": datetime.now(timezone.utc).isoformat(), "total": len(records), "method": "Qwen3 embeddings · UMAP (3D) · HDBSCAN · c-TF-IDF", "clusters": cluster_rows, "dandisets": records}
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")

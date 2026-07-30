@@ -23,7 +23,17 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install analysis dependencies
-        run: pip install -r requirements.txt
+        run: |
+          # CPU-only torch: the default PyPI wheel drags in ~2.5 GB of unused CUDA
+          # libraries, which dominates install time on a GPU-less runner.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -r requirements.txt
+      - name: Cache the embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-hub-${{ hashFiles('scripts/build_dataset.py') }}
+          restore-keys: hf-hub-
       - name: Fetch metadata and rebuild map
         run: python scripts/build_dataset.py
       - name: Commit refreshed data
